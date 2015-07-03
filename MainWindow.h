@@ -40,18 +40,26 @@ public:
 private:
   Ui::MainWindow *ui;
   QGraphicsScene m_scene;
+  QString current_filename;
+
   void applyTransform(const QTransform& transform);
 
-  QGraphicsPixmapItem *addFile(const QString& filename);
+  QGraphicsPixmapItem *add_image(const QString& filename);
 
   QGraphicsPixmapItem * m_cropTarget;
   QGraphicsRectItem * m_cropDisplay;
 
+  void open_project(const QString& filename);
+  void save_project(const QString& filename);
+
+  void remember_current(const QString& filename);
+
 
   // QWidget interface
 protected:
-  void dragEnterEvent(QDragEnterEvent * event);
-  void dropEvent(QDropEvent * event);
+  void dragEnterEvent(QDragEnterEvent* event);
+  void dropEvent(QDropEvent* event);
+  void closeEvent(QCloseEvent* event);
 private slots:
   void on_zoom2_clicked();
   void on_zoom_clicked();
@@ -60,14 +68,17 @@ private slots:
   void on_reflect_x_clicked();
   void on_reflect_y_clicked();
   void delete_selected();
-  void on_save_clicked();
   void on_reset_clicked();
   void on_crop_clicked();
-
-  // QWidget interface
   void on_cancel_crop_clicked();
-
   void on_apply_crop_clicked();
+  void on_action_open_triggered();
+
+  void on_action_save_triggered();
+
+  void on_action_save_as_triggered();
+
+  void on_action_add_image_triggered();
 
 protected:
   void mousePressEvent(QMouseEvent *);

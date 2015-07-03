@@ -14,6 +14,7 @@ MainWindow::MainWindow(QWidget *parent) :
   ui(new Ui::MainWindow)
 {
   ui->setupUi(this);
+  connect(ui->save, SIGNAL(clicked()), this, SLOT(on_action_save_triggered()));
   ui->graphicsView->setScene(&m_scene);
   ui->graphicsView->viewport()->installEventFilter(this);
   ui->crop_notice->hide();
@@ -22,23 +23,20 @@ MainWindow::MainWindow(QWidget *parent) :
   m_cropTarget = 0;
   m_cropDisplay = 0;
 
+  QSettings settings;
+  restoreGeometry(settings.value("geometry").toByteArray());
   QStringList args = qApp->arguments();
   if (args.count() > 1) {
-    QSettings settings(args[1], QSettings::IniFormat);
-    ui->graphicsView->setTransform(settings.value("transform").value<QTransform>());
-    QVariantList items = settings.value("items").toList();
-    foreach(QVariant itemData, items) {
-      QGraphicsPixmapItem *item = addFile(itemData.toMap()["filename"].toString());
-      if (item) {
-        item->setTransform(itemData.toMap()["transform"].value<QTransform>());
-        item->setPos(itemData.toMap()["pos"].toPointF());
-      }
+    open_project(args[1]);
+  } else {
+    QString path = settings.value("last_project").toString();
+    if (!path.isEmpty() && QFile::exists(path)) {
+      open_project(path);
     }
   }
 }
 
-MainWindow::~MainWindow()
-{
+MainWindow::~MainWindow() {
   delete ui;
 }
 
@@ -57,19 +55,53 @@ void MainWindow::applyTransform(const QTransform &transform) {
   }
 }
 
-QGraphicsPixmapItem *MainWindow::addFile(const QString &filename) {
+QGraphicsPixmapItem *MainWindow::add_image(const QString &filename) {
   QPixmap pixmap;
-  if (pixmap.load(filename)) {
-    QGraphicsPixmapItem *item = m_scene.addPixmap(pixmap);
-    item->setOffset(-pixmap.width() / 2, -pixmap.height() / 2);
-    item->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable);
-    item->setTransformationMode(Qt::SmoothTransformation);
-    item->setData(KEY_FILENAME, filename);
-    return item;
-  }
-  return 0;
+  if (!pixmap.load(filename)) { return 0; }
+  QGraphicsPixmapItem *item = m_scene.addPixmap(pixmap);
+  item->setOffset(-pixmap.width() / 2, -pixmap.height() / 2);
+  item->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable);
+  item->setTransformationMode(Qt::SmoothTransformation);
+  item->setData(KEY_FILENAME, filename);
+  return item;
 }
 
+void MainWindow::open_project(const QString& filename) {
+  m_scene.clear();
+  QSettings settings(filename, QSettings::IniFormat);
+  ui->graphicsView->setTransform(settings.value("transform").value<QTransform>());
+  QVariantList items = settings.value("items").toList();
+  foreach(QVariant itemData, items) {
+    QGraphicsPixmapItem *item = add_image(itemData.toMap()["filename"].toString());
+    if (item) {
+      item->setTransform(itemData.toMap()["transform"].value<QTransform>());
+      item->setPos(itemData.toMap()["pos"].toPointF());
+    }
+  }
+  remember_current(filename);
+}
+
+void MainWindow::save_project(const QString& filename) {
+  QSettings settings(filename, QSettings::IniFormat);
+  QVariantList list;
+  foreach(QGraphicsItem *item, m_scene.items(Qt::AscendingOrder)) {
+    QVariantMap v;
+    v["filename"] = item->data(KEY_FILENAME);
+    v["transform"] = QVariant::fromValue(item->transform());
+    v["pos"] = item->pos();
+    list << v;
+  }
+  settings.setValue("items", list);
+  settings.setValue("transform", QVariant::fromValue(ui->graphicsView->transform()));
+  remember_current(filename);
+}
+
+void MainWindow::remember_current(const QString& filename) {
+  current_filename = filename;
+  QSettings s;
+  s.setValue("last_project", current_filename);
+  s.setValue("geometry", saveGeometry());
+}
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event) {
   if (event->mimeData()->hasUrls()) {
@@ -79,10 +111,18 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event) {
 
 void MainWindow::dropEvent(QDropEvent *event) {
   foreach(QUrl url, event->mimeData()->urls()) {
-    QGraphicsPixmapItem *item = addFile(url.toLocalFile());
+    QGraphicsPixmapItem *item = add_image(url.toLocalFile());
     if (item) {
       item->setPos(ui->graphicsView->mapToScene(ui->graphicsView->viewport()->mapFrom(this, event->pos())));
     }
+  }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+  if (QMessageBox::question(this, QString(), tr("Quit?"), QMessageBox::Yes, QMessageBox::No) != QMessageBox::Yes) {
+    event->ignore();
+  } else {
+    event->accept();
   }
 }
 
@@ -128,24 +168,6 @@ void MainWindow::delete_selected() {
   }
 }
 
-void MainWindow::on_save_clicked() {
-  QString filename = QFileDialog::getSaveFileName(this, QString(), QString(), tr("Simple collage (*.scl)"));
-  if (filename.isEmpty()) {
-    return;
-  }
-  QSettings settings(filename, QSettings::IniFormat);
-  QVariantList list;
-  foreach(QGraphicsItem *item, m_scene.items(Qt::AscendingOrder)) {
-    QVariantMap v;
-    v["filename"] = item->data(KEY_FILENAME);
-    v["transform"] = QVariant::fromValue(item->transform());
-    v["pos"] = item->pos();
-    list << v;
-  }
-  settings.setValue("items", list);
-  settings.setValue("transform", QVariant::fromValue(ui->graphicsView->transform()));
-}
-
 void MainWindow::on_reset_clicked() {
   if (m_scene.selectedItems().isEmpty()) {
     ui->graphicsView->setTransform(QTransform());
@@ -185,13 +207,10 @@ bool MainWindow::eventFilter(QObject * object, QEvent *event) {
       (event->type() == QEvent::MouseButtonPress ||
        event->type() == QEvent::MouseMove)) {
     QMouseEvent * e = static_cast<QMouseEvent*>(event);
-    qDebug() << "ok1";
     if (m_cropTarget) {
-      qDebug() << "ok2";
       QPointF pos = ui->graphicsView->mapToScene(e->pos());
       pos = m_cropTarget->mapFromScene(pos);
       if (m_cropTarget->boundingRect().contains(pos)) {
-        qDebug() << "ok3";
         QRectF rect = m_cropDisplay->rect();
         if (e->buttons() & Qt::LeftButton) {
           rect.setTopLeft(pos);
@@ -221,4 +240,35 @@ void MainWindow::on_apply_crop_clicked() {
 
 
   on_cancel_crop_clicked();
+}
+
+void MainWindow::on_action_open_triggered() {
+  QString filename = QFileDialog::getOpenFileName(this, QString(), QString(), tr("Simple collage (*.scl)"));
+  if (filename.isEmpty()) { return; }
+  open_project(filename);
+}
+
+void MainWindow::on_action_save_triggered() {
+  if (current_filename.isEmpty()) {
+    on_action_save_as_triggered();
+  } else {
+    save_project(current_filename);
+  }
+}
+
+void MainWindow::on_action_save_as_triggered() {
+  QString filename = QFileDialog::getSaveFileName(this, QString(), QString(), tr("Simple collage (*.scl)"));
+  if (filename.isEmpty()) {
+    return;
+  }
+  if (!filename.endsWith(".scl")) {
+    filename += ".scl";
+  }
+  save_project(filename);
+}
+
+void MainWindow::on_action_add_image_triggered() {
+  QString filename = QFileDialog::getOpenFileName(this, QString(), QString(), tr("Images (*.png *.jpg *.jpeg)"));
+  if (filename.isEmpty()) { return; }
+  add_image(filename);
 }

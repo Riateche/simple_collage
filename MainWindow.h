@@ -24,7 +24,7 @@ class MainWindow;
  *
  */
 
-
+class CropHandle;
 
 class MainWindow : public QMainWindow
 {
@@ -37,29 +37,39 @@ public:
 
   static const int KEY_FILENAME = 1, KEY_CROP = 2;
 
+  void crop_handle_moved(Qt::Alignment alignment, QPointF pos);
+  bool crop_handles_are_updating() { return m_crop_handles_are_updating; }
+
 private:
-  Ui::MainWindow *ui;
+  Ui::MainWindow* ui;
   QGraphicsScene m_scene;
-  QString current_filename;
+  QString m_current_filename;
 
   void applyTransform(const QTransform& transform);
 
-  QGraphicsPixmapItem *add_image(const QString& filename);
+  QGraphicsPixmapItem* add_image(const QString& filename, QRect crop = QRect());
 
-  QGraphicsPixmapItem * m_cropTarget;
-  QGraphicsRectItem * m_cropDisplay;
+  QGraphicsPixmapItem* m_crop_target;
+  QGraphicsRectItem* m_crop_display;
+  QList<CropHandle*> m_crop_handles;
+  bool m_crop_handles_are_updating;
 
   void open_project(const QString& filename);
   void save_project(const QString& filename);
 
   void remember_current(const QString& filename);
+  void update_crop_handles();
+
+  void update_pixmap(QGraphicsPixmapItem* item);
 
 
-  // QWidget interface
+
 protected:
   void dragEnterEvent(QDragEnterEvent* event);
   void dropEvent(QDropEvent* event);
   void closeEvent(QCloseEvent* event);
+  void mousePressEvent(QMouseEvent *);
+
 private slots:
   void on_zoom2_clicked();
   void on_zoom_clicked();
@@ -80,12 +90,6 @@ private slots:
 
   void on_action_add_image_triggered();
 
-protected:
-  void mousePressEvent(QMouseEvent *);
-
-  // QObject interface
-public:
-  bool eventFilter(QObject *object, QEvent *event);
 };
 
 #endif // MAINWINDOW_H

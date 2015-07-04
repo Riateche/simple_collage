@@ -14,12 +14,10 @@ TEMPLATE = app
 
 SOURCES += main.cpp\
         MainWindow.cpp \
-    CropForm.cpp \
-    Resizable_rubber_band.cpp
+    CropHandle.cpp
 
 HEADERS  += MainWindow.h \
-    CropForm.h \
-    Resizable_rubber_band.h
+    CropHandle.h
 
 FORMS    += MainWindow.ui \
     CropForm.ui

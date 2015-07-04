@@ -6,8 +6,8 @@
 #include <QShortcut>
 #include <QFileDialog>
 #include <QSettings>
-#include "Resizable_rubber_band.h"
 #include <QMessageBox>
+#include "CropHandle.h"
 
 MainWindow::MainWindow(QWidget *parent) :
   QMainWindow(parent),
@@ -16,12 +16,12 @@ MainWindow::MainWindow(QWidget *parent) :
   ui->setupUi(this);
   connect(ui->save, SIGNAL(clicked()), this, SLOT(on_action_save_triggered()));
   ui->graphicsView->setScene(&m_scene);
-  ui->graphicsView->viewport()->installEventFilter(this);
   ui->crop_notice->hide();
   setAcceptDrops(true);
   new QShortcut(QKeySequence::Delete, this, SLOT(delete_selected()));
-  m_cropTarget = 0;
-  m_cropDisplay = 0;
+  m_crop_target = 0;
+  m_crop_display = 0;
+  m_crop_handles_are_updating = false;
 
   QSettings settings;
   restoreGeometry(settings.value("geometry").toByteArray());
@@ -37,7 +37,27 @@ MainWindow::MainWindow(QWidget *parent) :
 }
 
 MainWindow::~MainWindow() {
+  on_cancel_crop_clicked();
   delete ui;
+}
+
+void MainWindow::crop_handle_moved(Qt::Alignment alignment, QPointF pos) {
+  QRectF rect = m_crop_display->rect();
+  if (alignment & Qt::AlignLeft) {
+    rect.setLeft(pos.x());
+  }
+  if (alignment & Qt::AlignRight) {
+    rect.setRight(pos.x());
+  }
+  if (alignment & Qt::AlignTop) {
+    rect.setTop(pos.y());
+  }
+  if (alignment & Qt::AlignBottom) {
+    rect.setBottom(pos.y());
+  }
+  qDebug() << "new rect" << rect;
+  m_crop_display->setRect(rect);
+  update_crop_handles();
 }
 
 void MainWindow::applyTransform(const QTransform &transform) {
@@ -55,14 +75,13 @@ void MainWindow::applyTransform(const QTransform &transform) {
   }
 }
 
-QGraphicsPixmapItem *MainWindow::add_image(const QString &filename) {
-  QPixmap pixmap;
-  if (!pixmap.load(filename)) { return 0; }
-  QGraphicsPixmapItem *item = m_scene.addPixmap(pixmap);
-  item->setOffset(-pixmap.width() / 2, -pixmap.height() / 2);
+QGraphicsPixmapItem *MainWindow::add_image(const QString &filename, QRect crop) {
+  QGraphicsPixmapItem* item = m_scene.addPixmap(QPixmap());
+  item->setData(KEY_FILENAME, filename);
+  item->setData(KEY_CROP, crop);
   item->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable);
   item->setTransformationMode(Qt::SmoothTransformation);
-  item->setData(KEY_FILENAME, filename);
+  update_pixmap(item);
   return item;
 }
 
@@ -72,11 +91,11 @@ void MainWindow::open_project(const QString& filename) {
   ui->graphicsView->setTransform(settings.value("transform").value<QTransform>());
   QVariantList items = settings.value("items").toList();
   foreach(QVariant itemData, items) {
-    QGraphicsPixmapItem *item = add_image(itemData.toMap()["filename"].toString());
-    if (item) {
-      item->setTransform(itemData.toMap()["transform"].value<QTransform>());
-      item->setPos(itemData.toMap()["pos"].toPointF());
-    }
+    QGraphicsPixmapItem *item = add_image(
+          itemData.toMap()["filename"].toString(),
+          itemData.toMap()["crop"].toRect());
+    item->setTransform(itemData.toMap()["transform"].value<QTransform>());
+    item->setPos(itemData.toMap()["pos"].toPointF());
   }
   remember_current(filename);
 }
@@ -85,11 +104,16 @@ void MainWindow::save_project(const QString& filename) {
   QSettings settings(filename, QSettings::IniFormat);
   QVariantList list;
   foreach(QGraphicsItem *item, m_scene.items(Qt::AscendingOrder)) {
-    QVariantMap v;
-    v["filename"] = item->data(KEY_FILENAME);
-    v["transform"] = QVariant::fromValue(item->transform());
-    v["pos"] = item->pos();
-    list << v;
+    if (QGraphicsPixmapItem* pixmap_item = dynamic_cast<QGraphicsPixmapItem*>(item)) {
+      if (!pixmap_item->pixmap().isNull()) {
+        QVariantMap v;
+        v["filename"] = item->data(KEY_FILENAME);
+        v["crop"] = item->data(KEY_CROP);
+        v["transform"] = QVariant::fromValue(item->transform());
+        v["pos"] = item->pos();
+        list << v;
+      }
+    }
   }
   settings.setValue("items", list);
   settings.setValue("transform", QVariant::fromValue(ui->graphicsView->transform()));
@@ -97,10 +121,49 @@ void MainWindow::save_project(const QString& filename) {
 }
 
 void MainWindow::remember_current(const QString& filename) {
-  current_filename = filename;
+  m_current_filename = filename;
   QSettings s;
-  s.setValue("last_project", current_filename);
+  s.setValue("last_project", m_current_filename);
   s.setValue("geometry", saveGeometry());
+}
+
+void MainWindow::update_crop_handles() {
+  qDebug() << "update handles";
+  m_crop_handles_are_updating = true;
+  QRectF rect = m_crop_display->rect();
+  foreach(CropHandle* handle, m_crop_handles) {
+    QPointF pos = handle->pos();
+    if (handle->alignment() & Qt::AlignLeft) {
+      pos.setX(rect.left());
+    }
+    if (handle->alignment() & Qt::AlignRight) {
+      pos.setX(rect.right());
+    }
+    if (handle->alignment() & Qt::AlignTop) {
+      pos.setY(rect.top());
+    }
+    if (handle->alignment() & Qt::AlignBottom) {
+      pos.setY(rect.bottom());
+    }
+    if (handle->alignment() & Qt::AlignVCenter) {
+      pos.setY(rect.center().y());
+    }
+    if (handle->alignment() & Qt::AlignHCenter) {
+      pos.setX(rect.center().x());
+    }
+    handle->setPos(pos);
+  }
+  m_crop_handles_are_updating = false;
+}
+
+void MainWindow::update_pixmap(QGraphicsPixmapItem* item) {
+  QString path = item->data(KEY_FILENAME).toString();
+  QPixmap pixmap(path);
+  if (pixmap.isNull()) {
+    QMessageBox::critical(this, QString(), tr("Failed to load image file: '%1'").arg(path));
+  }
+  item->setPixmap(pixmap.copy(item->data(KEY_CROP).toRect()));
+  item->setOffset(-item->pixmap().rect().center());
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event) {
@@ -112,9 +175,7 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event) {
 void MainWindow::dropEvent(QDropEvent *event) {
   foreach(QUrl url, event->mimeData()->urls()) {
     QGraphicsPixmapItem *item = add_image(url.toLocalFile());
-    if (item) {
-      item->setPos(ui->graphicsView->mapToScene(ui->graphicsView->viewport()->mapFrom(this, event->pos())));
-    }
+    item->setPos(ui->graphicsView->mapToScene(ui->graphicsView->viewport()->mapFrom(this, event->pos())));
   }
 }
 
@@ -179,21 +240,50 @@ void MainWindow::on_reset_clicked() {
 }
 
 void MainWindow::on_crop_clicked() {
-  if (m_cropTarget) {
+  if (m_crop_target) {
     on_cancel_crop_clicked();
   }
   if (m_scene.selectedItems().isEmpty()) {
-    QMessageBox::information(this, "", tr("No selection"));
+    QMessageBox::information(this, QString(), tr("No selection"));
     return;
   }
-  m_cropTarget = dynamic_cast<QGraphicsPixmapItem*>(m_scene.selectedItems()[0]);
-  if (!m_cropTarget) { return; }
+  m_crop_target = dynamic_cast<QGraphicsPixmapItem*>(m_scene.selectedItems()[0]);
+  if (!m_crop_target) { return; }
 
-  m_cropDisplay = m_scene.addRect(m_cropTarget->boundingRect());
-  m_cropDisplay->setParentItem(m_cropTarget);
-  m_cropDisplay->setBrush(Qt::green);
-  m_cropDisplay->setOpacity(0.3);
+  m_crop_target->setData(KEY_CROP, QRect());
+  update_pixmap(m_crop_target);
+
+  QRectF rect = m_crop_target->sceneBoundingRect();
+
+  m_crop_display = m_scene.addRect(rect);
+  //m_crop_display->setFlag(QGraphicsItem::ItemIgnoresTransformations);
+  //m_crop_display->setParentItem(m_crop_target);
+  QPen pen(Qt::green);
+  pen.setCosmetic(true);
+  m_crop_display->setPen(pen);
+  //m_crop_display->setOpacity(0.3);
+
+  foreach(Qt::Alignment alignment, QList<Qt::Alignment>() <<
+          (Qt::AlignTop | Qt::AlignLeft) <<
+          (Qt::AlignRight | Qt::AlignBottom) <<
+          (Qt::AlignTop | Qt::AlignRight) <<
+          (Qt::AlignBottom | Qt::AlignLeft) <<
+          (Qt::AlignLeft | Qt::AlignVCenter) <<
+          (Qt::AlignRight | Qt::AlignVCenter) <<
+          (Qt::AlignTop | Qt::AlignHCenter) <<
+          (Qt::AlignBottom | Qt::AlignHCenter)
+    ) {
+    CropHandle* handle = new CropHandle(this, alignment);
+    m_crop_handles << handle;
+  }
+  update_crop_handles();
+  foreach(CropHandle* handle, m_crop_handles) {
+    m_scene.addItem(handle);
+  }
+  m_scene.clearSelection();
+
   ui->crop_notice->show();
+  ui->crop->setEnabled(false);
 }
 
 
@@ -201,44 +291,26 @@ void MainWindow::mousePressEvent(QMouseEvent * event) {
   QMainWindow::mousePressEvent(event);
 }
 
-
-bool MainWindow::eventFilter(QObject * object, QEvent *event) {
-  if (object == ui->graphicsView->viewport() &&
-      (event->type() == QEvent::MouseButtonPress ||
-       event->type() == QEvent::MouseMove)) {
-    QMouseEvent * e = static_cast<QMouseEvent*>(event);
-    if (m_cropTarget) {
-      QPointF pos = ui->graphicsView->mapToScene(e->pos());
-      pos = m_cropTarget->mapFromScene(pos);
-      if (m_cropTarget->boundingRect().contains(pos)) {
-        QRectF rect = m_cropDisplay->rect();
-        if (e->buttons() & Qt::LeftButton) {
-          rect.setTopLeft(pos);
-        } else if (e->buttons() & Qt::RightButton) {
-          rect.setBottomRight(pos);
-        }
-        m_cropDisplay->setRect(rect);
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 void MainWindow::on_cancel_crop_clicked() {
-  if (!m_cropTarget) { return; }
-  m_cropTarget = 0;
-  delete m_cropDisplay;
-  m_cropDisplay = 0;
+  if (!m_crop_target) { return; }
+  m_crop_target = 0;
+  delete m_crop_display;
+  m_crop_display = 0;
+  qDeleteAll(m_crop_handles);
+  m_crop_handles.clear();
   ui->crop_notice->hide();
+  ui->crop->setEnabled(true);
 }
 
 void MainWindow::on_apply_crop_clicked() {
-  QRect rect = m_cropDisplay->rect().translated(m_cropTarget->offset()).toAlignedRect();
-  m_cropTarget->setData(KEY_CROP, rect);
-  m_cropTarget->setPixmap(QPixmap(m_cropTarget->data(KEY_FILENAME).toString()).copy(rect));
+  QRect rect = m_crop_target->mapFromScene(m_crop_display->rect())
+      .boundingRect()
+      .translated(-m_crop_target->offset())
+      .toAlignedRect()
+      .intersected(m_crop_target->pixmap().rect());
 
-
+  m_crop_target->setData(KEY_CROP, rect);
+  update_pixmap(m_crop_target);
   on_cancel_crop_clicked();
 }
 
@@ -249,10 +321,10 @@ void MainWindow::on_action_open_triggered() {
 }
 
 void MainWindow::on_action_save_triggered() {
-  if (current_filename.isEmpty()) {
+  if (m_current_filename.isEmpty()) {
     on_action_save_as_triggered();
   } else {
-    save_project(current_filename);
+    save_project(m_current_filename);
   }
 }
 

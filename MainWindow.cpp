@@ -8,12 +8,14 @@
 #include <QSettings>
 #include <QMessageBox>
 #include "CropHandle.h"
+#include "Graphics_view_zoom.h"
 
 MainWindow::MainWindow(QWidget *parent) :
   QMainWindow(parent),
   ui(new Ui::MainWindow)
 {
   ui->setupUi(this);
+  new Graphics_view_zoom(ui->graphicsView);
   connect(ui->save, SIGNAL(clicked()), this, SLOT(on_action_save_triggered()));
   ui->graphicsView->setScene(&m_scene);
   ui->crop_notice->hide();

@@ -14,10 +14,12 @@ TEMPLATE = app
 
 SOURCES += main.cpp\
         MainWindow.cpp \
-    CropHandle.cpp
+    CropHandle.cpp \
+    Graphics_view_zoom.cpp
 
 HEADERS  += MainWindow.h \
-    CropHandle.h
+    CropHandle.h \
+    Graphics_view_zoom.h
 
 FORMS    += MainWindow.ui \
     CropForm.ui

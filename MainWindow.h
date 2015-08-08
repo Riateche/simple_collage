@@ -7,17 +7,15 @@
 
 
 namespace Ui {
-class MainWindow;
+  class MainWindow;
 }
 
 
 
-/*
- * crop
+/* TODO:
  * mouse hotkeys
  * export to png
  * boundary fix
- * reset all
  * clear selection
  * paste from clipboard
  * undo
@@ -26,14 +24,11 @@ class MainWindow;
 
 class CropHandle;
 
-class MainWindow : public QMainWindow
-{
+class MainWindow : public QMainWindow {
   Q_OBJECT
-
 public:
   explicit MainWindow(QWidget *parent = 0);
   ~MainWindow();
-
 
   static const int KEY_FILENAME = 1, KEY_CROP = 2;
 
@@ -61,8 +56,6 @@ private:
   void update_crop_handles();
 
   void update_pixmap(QGraphicsPixmapItem* item);
-
-
 
 protected:
   void dragEnterEvent(QDragEnterEvent* event);
